@@ -4,13 +4,16 @@
 #include <memory>
 #include <vector>
 #include "ChaseDocument.h"
+#include "ChaseDriver.h"
 #include "FrameHistory.h"
 #include "Outline.h"
 #include "PluginCommon.h"
 
 // The all-in-one Stilletchaser effect.
 // Driver decides which slices are lit (Chaser: a sequence stepped by the Step parameter,
-// which Resolume animates with BPM sync, the timeline or FFT; None: every slice of the view).
+// which Resolume animates with BPM sync, the timeline or FFT; Bumper: steps fired by hand from
+// the Bump buttons, each one playing the opacity curve over Bump Length; Random: slices of the
+// view picked at random, Random Speed times a second; None: every slice of the view).
 // Modules add to it; the Delayer shows each slice's content some time ago, and the Wiper
 // sends gradient wipes through the slices of a second sequence, and the Outliner draws slice
 // outlines on top. Chase and wipes are combined (a slice shows wherever either lights it), so
@@ -35,6 +38,8 @@ public:
 	}
 
 private:
+	friend struct StilletchaserTest;// plugin/tests/bumper_test.cpp
+
 	// Every slice's triangles, and where its content comes from (the input or a delayed frame).
 	struct SliceDraw
 	{
@@ -48,8 +53,8 @@ private:
 	void UpdateVisibility( bool raiseEvents );
 	// The sequence buttons: shown for the document's sequences, named after them, the chosen one marked.
 	void UpdateSequenceButtons( bool raiseEvents );
-	// Opacity of every slice for the current step position.
-	void ComputeLevels( const stilletchaser::ChaseDocument& doc, std::vector< float >& levels ) const;
+	// The bump buttons: one per step of the chosen sequence, the ones still sounding marked.
+	void UpdateBumpButtons( bool raiseEvents );
 	// How long ago each slice's content comes from: frames with the Frames unit, seconds otherwise.
 	void ComputeDelays( const stilletchaser::ChaseDocument& doc, std::vector< float >& delays ) const;
 	bool DelayInFrames() const;
@@ -80,16 +85,9 @@ private:
 	float framesPerSecond = 60.f;
 	double frameTime      = 0.0;// Seconds; when the current frame arrived.
 
-	// Chaser
-	float driver   = 0.f;
-	float sequence = 0.f;
-	float step     = 0.f;
-	float scaling  = 1.f;
-	float view     = 0.f;
-	float echoes   = 0.f;
-	float envelope = 0.f;
-	float sustain  = 0.2f;
-	float release  = 0.8f;
+	// Everything about which slices are lit and how brightly.
+	stilletchaser::ChaseDriver chase;
+	float scaling = 1.f;
 
 	// Delayer
 	float delayer       = 0.f;

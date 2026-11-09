@@ -18,6 +18,11 @@ static CFFGLPluginInfo PluginInfo(
 	"Chases and delays Advanced Output slices with sequences made in the Stilletchaser editor",
 	"Stilletchaser" );
 
+// The two button banks at the end of the parameter list. New parameters go after them so the
+// ids of everything above stay put and compositions saved with an earlier build still load.
+static const int SEQUENCE_BUTTONS = 32;
+static const int BUMP_BUTTONS     = 32;
+
 enum ParamID
 {
 	PID_DRIVER,
@@ -77,8 +82,22 @@ enum ParamID
 	// One button per sequence of the document (the first SEQUENCE_BUTTONS): pressing it, or its MIDI note, chooses
 	// that sequence. Shown for the sequences there are, named after them; the one playing is marked.
 	PID_SEQUENCE_BUTTON,
+
+	// One button per step of the chosen sequence (the first BUMP_BUTTONS): pressing it, or its
+	// MIDI note, fires that step. Then the Bumper's own controls.
+	PID_BUMP_BUTTON = PID_SEQUENCE_BUTTON + SEQUENCE_BUTTONS,
+	PID_BUMP_HOLD   = PID_BUMP_BUTTON + BUMP_BUTTONS,
+	PID_BUMP_LENGTH,
+	PID_BUMP_SYNC,
+	PID_BUMP_PREV,
+	PID_BUMP_NEXT,
+	PID_BUMP_BLAST,
+	PID_BLAST_SPEED,
+	PID_BUMP_AUTO_RESET,
+	PID_BUMP_RESET_DELAY,
+	PID_RANDOM_MAX,
+	PID_RANDOM_SPEED,
 };
-static const int SEQUENCE_BUTTONS = 32;
 
 enum OutlineTarget
 {
@@ -92,11 +111,6 @@ enum WipeSource
 	SOURCE_COLOUR,
 };
 
-enum Driver
-{
-	DRIVER_CHASER,
-	DRIVER_NONE,
-};
 
 enum DelayUnit
 {
@@ -105,7 +119,6 @@ enum DelayUnit
 	UNIT_BEATS,
 };
 
-static const int MAX_ECHOES        = 32;
 static const int MAX_HISTORY       = 1500;// Frames; about 25 s at 60 fps.
 static const size_t MAX_HISTORY_VRAM = (size_t)3 << 30;
 static const int FLOATS_PER_VERTEX = 6;// position xy, content uv, slice-local xy
@@ -151,13 +164,15 @@ Stilletchaser::Stilletchaser()
 	SetMinInputs( 1 );
 	SetMaxInputs( 1 );
 
-	SetOptionParamInfo( PID_DRIVER, "Driver", 2, driver );
-	SetParamElementInfo( PID_DRIVER, DRIVER_CHASER, "Chaser", (float)DRIVER_CHASER );
-	SetParamElementInfo( PID_DRIVER, DRIVER_NONE, "None (all slices)", (float)DRIVER_NONE );
+	SetOptionParamInfo( PID_DRIVER, "Driver", DRIVERS, chase.driver );
+	SetParamElementInfo( PID_DRIVER, 0, "Chaser", (float)DRIVER_CHASER );
+	SetParamElementInfo( PID_DRIVER, 1, "Bumper", (float)DRIVER_BUMPER );
+	SetParamElementInfo( PID_DRIVER, 2, "Random", (float)DRIVER_RANDOM );
+	SetParamElementInfo( PID_DRIVER, 3, "None (all slices)", (float)DRIVER_NONE );
 
 	SetOptionParamInfo( PID_SEQUENCE, "Sequence", 1, 0.f );
 	SetParamElementInfo( PID_SEQUENCE, 0, "-", 0.f );
-	SetParamInfo( PID_STEP, "Step", FF_TYPE_STANDARD, step );
+	SetParamInfo( PID_STEP, "Step", FF_TYPE_STANDARD, chase.step );
 
 	SetOptionParamInfo( PID_SCALING, "Scaling", 3, scaling );
 	SetParamElementInfo( PID_SCALING, SCALING_MASK, "Mask", (float)SCALING_MASK );
@@ -167,12 +182,12 @@ Stilletchaser::Stilletchaser()
 	SetOptionParamInfo( PID_VIEW, "View", 1, 0.f );
 	SetParamElementInfo( PID_VIEW, 0, "All", 0.f );
 
-	SetRangedParamInfo( PID_ECHOES, "Echoes", FF_TYPE_INTEGER, echoes, 0.f, (float)MAX_ECHOES );
+	SetRangedParamInfo( PID_ECHOES, "Echoes", FF_TYPE_INTEGER, chase.echoes, 0.f, (float)MAX_ECHOES );
 
 	SetOptionParamInfo( PID_ENVELOPE, "Envelope", 1, 0.f );
 	SetParamElementInfo( PID_ENVELOPE, 0, "Sustain / Release", 0.f );
-	SetParamInfo( PID_SUSTAIN, "Sustain", FF_TYPE_STANDARD, sustain );
-	SetParamInfo( PID_RELEASE, "Release", FF_TYPE_STANDARD, release );
+	SetParamInfo( PID_SUSTAIN, "Sustain", FF_TYPE_STANDARD, chase.sustain );
+	SetParamInfo( PID_RELEASE, "Release", FF_TYPE_STANDARD, chase.release );
 
 	// Delayer module.
 	SetParamInfo( PID_DELAYER, "Delayer", FF_TYPE_BOOLEAN, false );
@@ -193,7 +208,7 @@ Stilletchaser::Stilletchaser()
 	for( unsigned int id = PID_DELAYER; id <= PID_RESET_MINUTES; ++id )
 		SetParamGroup( id, "Delayer" );
 
-	// Wiper module: gradient wipes through the slices of its own sequence, on top of the chase.
+	// Wiper module: gradient wipes through the slices of its own sequence, on top of the 
 	SetParamInfo( PID_WIPER, "Wiper", FF_TYPE_BOOLEAN, false );
 	SetOptionParamInfo( PID_WIPE_SEQUENCE, "Wipe Sequence", 1, 0.f );
 	SetParamElementInfo( PID_WIPE_SEQUENCE, 0, "-", 0.f );
@@ -246,6 +261,32 @@ Stilletchaser::Stilletchaser()
 		SetParamGroup( PID_SEQUENCE_BUTTON + i, "Sequences" );
 	}
 
+	// Bumper: a pad per step of the chosen sequence, plus how long a bump lasts.
+	for( int i = 0; i < BUMP_BUTTONS; ++i )
+	{
+		const std::string name = "Bump " + std::to_string( i + 1 );
+		SetParamInfo( PID_BUMP_BUTTON + i, name.c_str(), FF_TYPE_EVENT, false );
+		SetParamGroup( PID_BUMP_BUTTON + i, "Bumper" );
+	}
+	SetParamInfo( PID_BUMP_HOLD, "Bump Hold", FF_TYPE_BOOLEAN, false );
+	SetRangedParamInfo( PID_BUMP_LENGTH, "Bump Length", FF_TYPE_STANDARD, chase.bumpLength, 0.02f, 5.f );
+	SetParamInfo( PID_BUMP_SYNC, "Bump Sync", FF_TYPE_BOOLEAN, false );
+	// Tapping the sequence by hand, and the Blast that runs it on its own.
+	SetParamInfo( PID_BUMP_PREV, "Previous", FF_TYPE_EVENT, false );
+	SetParamInfo( PID_BUMP_NEXT, "Next", FF_TYPE_EVENT, false );
+	SetParamInfo( PID_BUMP_BLAST, "Blast", FF_TYPE_EVENT, false );
+	SetRangedParamInfo( PID_BLAST_SPEED, "Blast Speed", FF_TYPE_STANDARD, chase.blastSpeed, 1.f, 50.f );
+	SetParamInfo( PID_BUMP_AUTO_RESET, "Bump Auto Reset", FF_TYPE_BOOLEAN, true );
+	SetRangedParamInfo( PID_BUMP_RESET_DELAY, "Bump Reset Delay", FF_TYPE_STANDARD, chase.bumpResetDelay, 0.1f, 10.f );
+	for( unsigned int id = PID_BUMP_HOLD; id <= PID_BUMP_RESET_DELAY; ++id )
+		SetParamGroup( id, "Bumper" );
+
+	// Random: how many slices a pick lights, and how often it picks.
+	SetRangedParamInfo( PID_RANDOM_MAX, "Max Slices", FF_TYPE_STANDARD, chase.randomMax, 1.f, 16.f );
+	SetRangedParamInfo( PID_RANDOM_SPEED, "Random Speed", FF_TYPE_STANDARD, chase.randomSpeed, 0.1f, 30.f );
+	SetParamGroup( PID_RANDOM_MAX, "Random" );
+	SetParamGroup( PID_RANDOM_SPEED, "Random" );
+
 	doc        = DocumentWatcher::Instance().Current();
 	docVersion = DocumentWatcher::Instance().Version();
 	RefreshMenus( false );
@@ -274,15 +315,30 @@ void Stilletchaser::RefreshMenus( bool raiseEvents )
 // Only the controls that do something with the current choices are shown.
 void Stilletchaser::UpdateVisibility( bool raiseEvents )
 {
-	const bool chaser = Option( driver, 2 ) == DRIVER_CHASER;
-	const bool curve  = std::lround( envelope ) > 0;
-	for( unsigned int id : { PID_STEP, PID_ECHOES, PID_ENVELOPE } )
-		SetParamVisibility( id, chaser, raiseEvents );
+	const bool chaser = Option( chase.driver, DRIVERS ) == DRIVER_CHASER;
+	const bool bumper = Option( chase.driver, DRIVERS ) == DRIVER_BUMPER;
+	const bool random = Option( chase.driver, DRIVERS ) == DRIVER_RANDOM;
+	const bool played = chaser || bumper || random;
+	const bool curve  = std::lround( chase.envelope ) > 0;
+	// Step is the Chaser's own; a Bumper is stepped by its pads, a Random by itself.
+	SetParamVisibility( PID_STEP, chaser, raiseEvents );
+	for( unsigned int id : { PID_ECHOES, PID_ENVELOPE } )
+		SetParamVisibility( id, played, raiseEvents );
+	// Random picks slices straight out of the View, so it has no use for sequences.
+	for( unsigned int id : { PID_RANDOM_MAX, PID_RANDOM_SPEED } )
+		SetParamVisibility( id, random, raiseEvents );
 	// The sequences are buttons; the menu only says there are none yet (it stays a parameter, for saved settings).
-	SetParamVisibility( PID_SEQUENCE, chaser && doc->sequences.empty(), raiseEvents );
+	SetParamVisibility( PID_SEQUENCE, ( chaser || bumper ) && doc->sequences.empty(), raiseEvents );
 	UpdateSequenceButtons( raiseEvents );
-	SetParamVisibility( PID_SUSTAIN, chaser && !curve, raiseEvents );
-	SetParamVisibility( PID_RELEASE, chaser && !curve, raiseEvents );
+	// Held bumps wait at Sustain, so it stays useful there even when a drawn curve is chosen.
+	const bool holding = bumper && chase.bumpHold > 0.5f;
+	SetParamVisibility( PID_SUSTAIN, ( played && !curve ) || holding, raiseEvents );
+	SetParamVisibility( PID_RELEASE, played && !curve, raiseEvents );
+
+	UpdateBumpButtons( raiseEvents );
+	for( unsigned int id = PID_BUMP_HOLD; id <= PID_BUMP_RESET_DELAY; ++id )
+		SetParamVisibility( id, bumper, raiseEvents );
+	SetParamVisibility( PID_BUMP_RESET_DELAY, bumper && chase.bumpAutoReset > 0.5f, raiseEvents );
 
 	const bool delaying = delayer > 0.5f;
 	const int unit      = Option( delayUnit, 3 );
@@ -312,9 +368,10 @@ void Stilletchaser::UpdateVisibility( bool raiseEvents )
 
 void Stilletchaser::UpdateSequenceButtons( bool raiseEvents )
 {
-	const bool chaser  = Option( driver, 2 ) == DRIVER_CHASER;
+	const int d        = Option( chase.driver, DRIVERS );
+	const bool chaser  = d == DRIVER_CHASER || d == DRIVER_BUMPER;
 	const int count    = (int)doc->sequences.size();
-	const int selected = count > 0 ? Option( sequence, count ) : -1;
+	const int selected = count > 0 ? Option( chase.sequence, count ) : -1;
 	for( int i = 0; i < SEQUENCE_BUTTONS; ++i )
 	{
 		const bool shown = chaser && i < count;
@@ -323,6 +380,23 @@ void Stilletchaser::UpdateSequenceButtons( bool raiseEvents )
 		if( i == selected )
 			name = "\xe2\x96\xb6 " + name; // the one playing
 		SetParamDisplayName( PID_SEQUENCE_BUTTON + i, name, raiseEvents );
+	}
+}
+
+// A pad per step of the chosen sequence, named after its number; the ones sounding are marked.
+void Stilletchaser::UpdateBumpButtons( bool raiseEvents )
+{
+	const bool bumper = Option( chase.driver, DRIVERS ) == DRIVER_BUMPER;
+	const int count = bumper ? std::min( chase.StepCount( *doc ), BUMP_BUTTONS ) : 0;
+
+	const std::vector< bool > sounding = chase.Sounding( BUMP_BUTTONS );
+	for( int i = 0; i < BUMP_BUTTONS; ++i )
+	{
+		SetParamVisibility( PID_BUMP_BUTTON + i, i < count, raiseEvents );
+		std::string name = "Bump " + std::to_string( i + 1 );
+		if( sounding[ i ] )
+			name = "\xe2\x96\xb6 " + name;
+		SetParamDisplayName( PID_BUMP_BUTTON + i, name, raiseEvents );
 	}
 }
 
@@ -370,41 +444,6 @@ FFResult Stilletchaser::DeInitGL()
 		glDeleteVertexArrays( 1, &vao );
 	vbo = vao = 0;
 	return FF_SUCCESS;
-}
-
-void Stilletchaser::ComputeLevels( const ChaseDocument& d, std::vector< float >& levels ) const
-{
-	const View& v = d.views[ Option( view, (int)d.views.size() ) ];
-	if( Option( driver, 2 ) == DRIVER_NONE || d.sequences.empty() )
-	{
-		levels.resize( d.slices.size() );
-		for( size_t s = 0; s < d.slices.size(); ++s )
-			levels[ s ] = Option( driver, 2 ) == DRIVER_NONE && v.includes[ s ] ? 1.f : 0.f;
-		return;
-	}
-	levels.assign( d.slices.size(), 0.f );
-	const Sequence& seq = d.sequences[ Option( sequence, (int)d.sequences.size() ) ];
-	const int count     = (int)seq.steps.size();
-	const Envelope* env = ChosenEnvelope( d, envelope );
-
-	// Step 0..1 runs through the whole sequence. A step stays lit for 1 + Echoes steps,
-	// and the opacity curve spans that whole life.
-	const float position = std::min( step, 0.99999f ) * (float)count;
-	const int current    = (int)std::floor( position );
-	const float within   = position - (float)current;
-	const int life       = 1 + std::clamp( (int)std::lround( echoes ), 0, MAX_ECHOES );
-
-	for( int age = 0; age < life; ++age )
-	{
-		int index     = ( ( current - age ) % count + count ) % count;
-		float t       = ( within + (float)age ) / (float)life;
-		float opacity = env ? SampleLut( env->lut, t ) : SustainRelease( sustain, std::max( release, sustain ), t );
-		if( opacity <= 0.f )
-			continue;
-		for( int slice : seq.steps[ index ] )
-			if( v.includes[ slice ] )
-				levels[ slice ] = std::max( levels[ slice ], opacity );
-	}
 }
 
 bool Stilletchaser::DelayInFrames() const
@@ -558,7 +597,7 @@ void Stilletchaser::DrawWipes( const ChaseDocument& d, const FFGLTexCoords& inpu
 	if( wipes.empty() )
 		return;
 	const Sequence& seq = d.sequences[ Option( WipeParam( PID_WIPE_SEQUENCE ), (int)d.sequences.size() ) ];
-	const View& v       = d.views[ Option( view, (int)d.views.size() ) ];
+	const View& v       = d.views[ Option( chase.view, (int)d.views.size() ) ];
 	const float length  = std::clamp( WipeParam( PID_WIPE_LENGTH ), 0.01f, 1.f );
 	const Envelope* env = ChosenEnvelope( d, WipeParam( PID_WIPE_ENVELOPE ) );
 	const bool colour   = Option( WipeParam( PID_WIPE_SOURCE ), 2 ) == SOURCE_COLOUR;
@@ -604,7 +643,7 @@ void Stilletchaser::DrawOutlines( const ChaseDocument& d, const std::vector< flo
 {
 	if( OutlineParam( PID_OUTLINER ) <= 0.5f )
 		return;
-	const View& v = d.views[ Option( view, (int)d.views.size() ) ];
+	const View& v = d.views[ Option( chase.view, (int)d.views.size() ) ];
 	std::vector< float > strength( d.slices.size(), 0.f );
 	if( Option( OutlineParam( PID_OUTLINE_TARGET ), 2 ) == TARGET_ALL )
 	{
@@ -673,7 +712,8 @@ FFResult Stilletchaser::ProcessOpenGL( ProcessOpenGLStruct* pGL )
 
 	std::vector< float > levels;
 	std::vector< float > delays;
-	ComputeLevels( *doc, levels );
+	chase.bpm = bpm;// The host's tempo, for Bump Sync.
+	chase.Levels( *doc, levels );
 	ComputeDelays( *doc, delays );
 	BuildVertices( *doc, delays, input );
 	if( vertices.empty() )
@@ -718,23 +758,52 @@ FFResult Stilletchaser::SetFloatParameter( unsigned int index, float value )
 	switch( index )
 	{
 	case PID_DRIVER:
-		driver = value;
+		chase.driver = value;
+		// A Bump means a step under Bumper and a slice under Random, so nothing carries over.
+		chase.Reset();
 		UpdateVisibility( true );
 		break;
 	case PID_SEQUENCE:
-		sequence = value;
+		chase.sequence = value;
 		UpdateSequenceButtons( true );
 		break;
-	case PID_STEP:     step = value; break;
+	case PID_STEP:     chase.step = value; break;
 	case PID_SCALING:  scaling = value; break;
-	case PID_VIEW:     view = value; break;
-	case PID_ECHOES:   echoes = value; break;
+	case PID_VIEW:     chase.view = value; break;
+	case PID_ECHOES:   chase.echoes = value; break;
 	case PID_ENVELOPE:
-		envelope = value;
+		chase.envelope = value;
 		UpdateVisibility( true );
 		break;
-	case PID_SUSTAIN:  sustain = value; break;
-	case PID_RELEASE:  release = value; break;
+	case PID_SUSTAIN:  chase.sustain = value; break;
+	case PID_RELEASE:  chase.release = value; break;
+	case PID_BUMP_HOLD:
+		chase.bumpHold = value;
+		UpdateVisibility( true );
+		break;
+	case PID_BUMP_LENGTH: chase.bumpLength = value; break;
+	case PID_BUMP_SYNC:   chase.bumpSync = value; break;
+	case PID_BLAST_SPEED: chase.blastSpeed = value; break;
+	case PID_BUMP_AUTO_RESET:
+		chase.bumpAutoReset = value;
+		UpdateVisibility( true );
+		break;
+	case PID_BUMP_RESET_DELAY: chase.bumpResetDelay = value; break;
+	case PID_RANDOM_MAX:   chase.randomMax = value; break;
+	case PID_RANDOM_SPEED: chase.randomSpeed = value; break;
+	case PID_BUMP_PREV:
+		if( value > 0.5f )
+			chase.Tap( -1 );
+		break;
+	case PID_BUMP_NEXT:
+		if( value > 0.5f )
+			chase.Tap( 1 );
+		break;
+	case PID_BUMP_BLAST:
+		// Pressing starts it and letting go stops it. Should the host not report the release,
+		// a second press stops it instead, so the button works either way.
+		chase.SetBlast( value > 0.5f ? !chase.Blasting() : false );
+		break;
 	case PID_DELAYER:
 		delayer = value;
 		UpdateVisibility( true );
@@ -774,10 +843,22 @@ FFResult Stilletchaser::SetFloatParameter( unsigned int index, float value )
 			const int chosen = (int)( index - PID_SEQUENCE_BUTTON );
 			if( value > 0.5f && chosen < (int)doc->sequences.size() )
 			{
-				sequence = (float)chosen;
+				chase.sequence = (float)chosen;
 				RaiseParamEvent( PID_SEQUENCE, FF_EVENT_FLAG_VALUE );
 				UpdateSequenceButtons( true );
+				// A different sequence has different steps, so the pads follow and the tapping restarts.
+				chase.Reset();
+				UpdateBumpButtons( true );
 			}
+		}
+		else if( index >= PID_BUMP_BUTTON && index < PID_BUMP_BUTTON + BUMP_BUTTONS )
+		{
+			// The press fires the step; the release only ends it when Hold is on.
+			const int chosen = (int)( index - PID_BUMP_BUTTON );
+			if( value > 0.5f )
+				chase.StartBump( chosen );
+			else
+				chase.EndBump( chosen );
 		}
 		else
 			return FF_FAIL;
@@ -789,15 +870,23 @@ float Stilletchaser::GetFloatParameter( unsigned int index )
 {
 	switch( index )
 	{
-	case PID_DRIVER:         return driver;
-	case PID_SEQUENCE:       return sequence;
-	case PID_STEP:           return step;
+	case PID_DRIVER:         return chase.driver;
+	case PID_SEQUENCE:       return chase.sequence;
+	case PID_STEP:           return chase.step;
 	case PID_SCALING:        return scaling;
-	case PID_VIEW:           return view;
-	case PID_ECHOES:         return echoes;
-	case PID_ENVELOPE:       return envelope;
-	case PID_SUSTAIN:        return sustain;
-	case PID_RELEASE:        return release;
+	case PID_VIEW:           return chase.view;
+	case PID_ECHOES:         return chase.echoes;
+	case PID_ENVELOPE:       return chase.envelope;
+	case PID_SUSTAIN:        return chase.sustain;
+	case PID_RELEASE:        return chase.release;
+	case PID_BUMP_HOLD:      return chase.bumpHold;
+	case PID_BUMP_LENGTH:    return chase.bumpLength;
+	case PID_BUMP_SYNC:      return chase.bumpSync;
+	case PID_BLAST_SPEED:    return chase.blastSpeed;
+	case PID_BUMP_AUTO_RESET: return chase.bumpAutoReset;
+	case PID_BUMP_RESET_DELAY: return chase.bumpResetDelay;
+	case PID_RANDOM_MAX:     return chase.randomMax;
+	case PID_RANDOM_SPEED:   return chase.randomSpeed;
 	case PID_DELAYER:        return delayer;
 	case PID_DELAY_SEQUENCE: return delaySequence;
 	case PID_DELAY:          return delay;
@@ -824,9 +913,9 @@ char* Stilletchaser::GetParameterDisplay( unsigned int index )
 	if( ( index == PID_STEP || index == PID_WIPE_STEP ) && doc && !doc->sequences.empty() )
 	{
 		const bool wipeStep = index == PID_WIPE_STEP;
-		const Sequence& seq = doc->sequences[ Option( wipeStep ? WipeParam( PID_WIPE_SEQUENCE ) : sequence, (int)doc->sequences.size() ) ];
+		const Sequence& seq = doc->sequences[ Option( wipeStep ? WipeParam( PID_WIPE_SEQUENCE ) : chase.sequence, (int)doc->sequences.size() ) ];
 		int count           = (int)seq.steps.size();
-		float position      = wipeStep ? WipeParam( PID_WIPE_STEP ) : step;
+		float position      = wipeStep ? WipeParam( PID_WIPE_STEP ) : chase.step;
 		int current         = std::min( (int)( position * (float)count ), count - 1 ) + 1;
 		std::snprintf( display, sizeof( display ), "%d / %d", current, count );
 		return display;
@@ -838,6 +927,29 @@ char* Stilletchaser::GetParameterDisplay( unsigned int index )
 			std::snprintf( display, sizeof( display ), "%d frames", (int)std::lround( full ) );
 		else
 			std::snprintf( display, sizeof( display ), "%.2f s", full );
+		return display;
+	}
+	if( index == PID_BUMP_LENGTH )
+	{
+		if( chase.bumpSync > 0.5f )
+			std::snprintf( display, sizeof( display ), "%.2f beats", std::clamp( chase.bumpLength, 0.02f, 5.f ) );
+		else
+			std::snprintf( display, sizeof( display ), "%.2f s", std::clamp( chase.bumpLength, 0.02f, 5.f ) );
+		return display;
+	}
+	if( index == PID_RANDOM_SPEED )
+	{
+		std::snprintf( display, sizeof( display ), "%.1f picks/s", std::clamp( chase.randomSpeed, 0.1f, 30.f ) );
+		return display;
+	}
+	if( index == PID_RANDOM_MAX )
+	{
+		std::snprintf( display, sizeof( display ), "up to %d", std::max( 1, (int)std::lround( chase.randomMax ) ) );
+		return display;
+	}
+	if( index == PID_BLAST_SPEED )
+	{
+		std::snprintf( display, sizeof( display ), "%.1f steps/s", std::clamp( chase.blastSpeed, 1.f, 50.f ) );
 		return display;
 	}
 	if( index == PID_QUALITY )

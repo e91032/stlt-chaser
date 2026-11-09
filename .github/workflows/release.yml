@@ -58,10 +58,22 @@ jobs:
           done
           exit $status
 
+      - name: Check the shaders
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          brew install glslang || true
+          python3 plugin/tests/check_shaders.py
+
       - name: Test the document loader
         shell: bash
         run: |
           if [ -f plugin/build/Release/document_test.exe ]; then plugin/build/Release/document_test.exe; else plugin/build/document_test; fi
+
+      - name: Test the Bumper driver
+        shell: bash
+        run: |
+          if [ -f plugin/build/Release/bumper_test.exe ]; then plugin/build/Release/bumper_test.exe; else plugin/build/bumper_test; fi
 
       - uses: actions/setup-node@v4
         with:

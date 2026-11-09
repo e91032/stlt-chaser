@@ -1,5 +1,7 @@
 // STLT-OUTLINER: outlines drawn inside every slice of a view, so they never bleed into
-// neighbours. Static outlines can feather inward; animated ones become tapered lines that
+// neighbours. Built twice: as an effect that draws over its input, and, with
+// STLT_OUTLINER_SOURCE defined, as a source that needs no input at all, so the outlines can be
+// used as a clip of their own or as a mask for STLT-MASK. Static outlines can feather inward; animated ones become tapered lines that
 // run around each slice's edge, driven by Phase (animate it in Resolume).
 #include <FFGLSDK.h>
 #include <memory>
@@ -61,8 +63,14 @@ class Outliner : public StilletchaserPlugin
 public:
 	Outliner()
 	{
+#ifdef STLT_OUTLINER_SOURCE
+		// A source has nothing underneath it, so there is nothing to show through or follow.
+		SetMinInputs( 0 );
+		SetMaxInputs( 0 );
+#else
 		SetMinInputs( 1 );
 		SetMaxInputs( 1 );
+#endif
 		SetOptionParamInfo( PID_VIEW, "View", 1, 0.f );
 		SetParamElementInfo( PID_VIEW, 0, "All", 0.f );
 		SetParamInfo( PID_RED, "Red", FF_TYPE_RED, 1.f );
@@ -134,15 +142,23 @@ public:
 
 	const char* GetShortName() override
 	{
+#ifdef STLT_OUTLINER_SOURCE
+		static const char* sname = "STOutSrc";
+#else
 		static const char* sname = "STOutline";
+#endif
 		return sname;
 	}
 
 	FFResult ProcessOpenGL( ProcessOpenGLStruct* pGL ) override
 	{
+#ifdef STLT_OUTLINER_SOURCE
+		const FFGLTextureStruct* input = nullptr;
+#else
 		if( pGL->numInputTextures < 1 || pGL->inputTextures[ 0 ] == nullptr )
 			return FF_FAIL;
-		const FFGLTextureStruct& input = *pGL->inputTextures[ 0 ];
+		const FFGLTextureStruct* input = pGL->inputTextures[ 0 ];
+#endif
 		DocumentWatcher& watcher       = DocumentWatcher::Instance();
 		doc                            = watcher.Current();
 		if( watcher.Version() != docVersion )
@@ -153,12 +169,12 @@ public:
 
 		glClearColor( 0.f, 0.f, 0.f, 0.f );
 		glClear( GL_COLOR_BUFFER_BIT );
-		if( values[ PID_SHOW_ORIGINAL ] > 0.5f )
+		if( input != nullptr && values[ PID_SHOW_ORIGINAL ] > 0.5f )
 		{
 			ScopedShaderBinding copyBinding( copyShader.GetGLID() );
 			ScopedSamplerActivation activateSampler( 0 );
-			Scoped2DTextureBinding textureBinding( input.Handle );
-			FFGLTexCoords maxCoords = GetMaxGLTexCoords( input );
+			Scoped2DTextureBinding textureBinding( input->Handle );
+			FFGLTexCoords maxCoords = GetMaxGLTexCoords( *input );
 			copyShader.Set( "inputTexture", 0 );
 			copyShader.Set( "maxUV", maxCoords.s, maxCoords.t );
 			quad.Draw();
@@ -170,7 +186,8 @@ public:
 		std::vector< float > strength( doc->slices.size() );
 		for( size_t s = 0; s < strength.size(); ++s )
 			strength[ s ] = view.includes[ s ] ? 1.f : 0.f;
-		outlines.Draw( *doc, Style(), strength, values[ PID_LIT_ONLY ] > 0.5f ? &input : nullptr );
+		const bool litOnly = input != nullptr && values[ PID_LIT_ONLY ] > 0.5f;
+		outlines.Draw( *doc, Style(), strength, litOnly ? input : nullptr );
 		return FF_SUCCESS;
 	}
 
@@ -208,6 +225,10 @@ private:
 	void UpdateVisibility( bool raiseEvents )
 	{
 		const bool animate = values[ PID_ANIMATE ] > 0.5f;
+#ifdef STLT_OUTLINER_SOURCE
+		SetParamVisibility( PID_SHOW_ORIGINAL, false, raiseEvents );
+		SetParamVisibility( PID_LIT_ONLY, false, raiseEvents );
+#endif
 		SetParamVisibility( PID_FEATHER, !animate, raiseEvents );
 		for( int id = PID_PHASE; id <= PID_ENVELOPE; ++id )
 			SetParamVisibility( id, animate, raiseEvents );
@@ -221,6 +242,19 @@ private:
 	float values[ PID_COUNT ];
 };
 
+#ifdef STLT_OUTLINER_SOURCE
+static CFFGLPluginInfo PluginInfo(
+	PluginFactory< Outliner >,
+	"STOS",                 // Plugin unique ID
+	"STLT-OUTLINER SOURCE", // Plugin name
+	2,                      // API major version number
+	1,                      // API minor version number
+	1,                      // Plugin major version number
+	0,                      // Plugin minor version number
+	FF_SOURCE,
+	"Slice outlines as a clip of their own, with no input needed",
+	"Stilletchaser" );
+#else
 static CFFGLPluginInfo PluginInfo(
 	PluginFactory< Outliner >,
 	"STOL",          // Plugin unique ID
@@ -232,3 +266,4 @@ static CFFGLPluginInfo PluginInfo(
 	FF_EFFECT,
 	"Outlines inside Advanced Output slices, static or running around their edges",
 	"Stilletchaser" );
+#endif

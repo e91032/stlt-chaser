@@ -24,6 +24,7 @@ file(GLOB FFGL_SOURCES
 
 # The FFGL SDK and the shared document code, built once for every plugin.
 add_library(stilletchaser-common STATIC
+    src/ChaseDriver.cpp
     ${FFGL_SOURCES}
     src/ChaseDocument.cpp
     src/ChaseDocument.h
@@ -86,9 +87,18 @@ endfunction()
 add_stilletchaser_plugin(STLT-CHASER src/Stilletchaser.cpp src/Stilletchaser.h)
 add_stilletchaser_plugin(STLT-WIPER src/Wiper.cpp)
 add_stilletchaser_plugin(STLT-OUTLINER src/Outliner.cpp)
+add_stilletchaser_plugin(STLT-SAMPLER src/Sampler.cpp)
+add_stilletchaser_plugin(STLT-TILER src/Tiler.cpp)
+add_stilletchaser_plugin(STLT-BLEND src/Blend.cpp)
+add_stilletchaser_plugin(STLT-MASK src/Mask.cpp)
+
+# The same Outliner source, built a second time as a source plugin that needs no input.
+add_stilletchaser_plugin(STLT-OUTLINER-SOURCE src/Outliner.cpp)
+target_compile_definitions(STLT-OUTLINER-SOURCE PRIVATE STLT_OUTLINER_SOURCE)
 
 # `cmake --install build --prefix dist` gathers the plugins that ship with the editor.
-set(STLT_PLUGINS STLT-CHASER STLT-WIPER STLT-OUTLINER)
+set(STLT_PLUGINS STLT-CHASER STLT-WIPER STLT-OUTLINER STLT-OUTLINER-SOURCE
+    STLT-SAMPLER STLT-TILER STLT-BLEND STLT-MASK)
 if(WIN32)
     foreach(plugin ${STLT_PLUGINS})
         install(FILES $<TARGET_FILE:${plugin}> DESTINATION .)
@@ -108,3 +118,7 @@ if(WIN32)
     target_link_libraries(host_test PRIVATE "${FFGL_ROOT}/deps/glew-2.1.0/lib/Release/x64/glew32s.lib" opengl32)
     add_dependencies(host_test STLT-CHASER STLT-WIPER STLT-OUTLINER)
 endif()
+
+# The Bumper driver's timing and envelope, without a GPU.
+add_executable(bumper_test tests/bumper_test.cpp)
+target_link_libraries(bumper_test PRIVATE stilletchaser-common)

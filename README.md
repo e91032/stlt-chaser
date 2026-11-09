@@ -4,7 +4,17 @@ Screen bumps, chases, wipes, delays and outlines across the slices of **Resolume
 STLT-CHASER is a free, open-source toolkit made of:
 
 - **an editor** (Windows and macOS) where you draw step sequences on your stage, slice by slice, and
-- **three FFGL effects** for Resolume that play them live: **STLT-CHASER**, **STLT-WIPER** and **STLT-OUTLINER**.
+- **three FFGL effects** for Resolume that play them live: **STLT-CHASER**, **STLT-WIPER** and **STLT-BLEND** – a blend mode rather than an effect, so it takes two layers. The chase does not decide how opaque each slice is, it decides how far each slice has crossed from the layer below to the layer above: put any effect on the top layer and the chase runs that effect through the slices. It carries the whole *Driver* set (Chaser, Bumper with its pads, Next, Previous and Blast, Random, None) plus *Amount* and *Invert*, so it stands in for a chaser blend, a bumper blend and a random blend at once.
+
+**STLT-MASK** – a blend mode that shows the layer below through the brightness of the layer above. *Mask From* (Luminance, Alpha, Brightest Channel), *Invert*, *Amount*. Made for STLT-OUTLINER or STLT-TILER on the top layer, so their outlines or tiles become a stencil for the footage underneath.
+
+**STLT-OUTLINER SOURCE** – the same outliner built as a source, needing no input, so the outlines can be used as a clip of their own or as the mask layer for STLT-MASK.
+
+**STLT-SAMPLER** – reads the content lying under each slice and fills that slice with it as a flat colour, turning footage into a wall of lights. *Sample Mode* (Centre, Average, Blend), *Colour Mode* (Colour, Luminance), *Blend Spread*, *Gain*, *View*, *Show Original*.
+
+**STLT-TILER** – fills every slice of a view with a grid of tiles, in composition pixels so they stay square whatever shape the slice is, and runs a pattern across them: *Tile Size*, *Mode* (Minimal, Rainbow, Texture for a mosaic of the content, Matrix for falling columns), *Phase* (animate it), *Length*, *Seed*, *Randomise*, *Fan* across the slices, *Direction*, square or circle tiles with *Radius*, *Softness* and *Edge Only*, a colour, and an optional *Grid* drawn under them.
+
+**STLT-OUTLINER**.
 
 Whatever you change in the editor reaches Resolume within half a second, even while the effects are running.
 
@@ -36,7 +46,7 @@ Requirements: Resolume Arena or Avenue 7.4 or later (tested with Arena 7.23 on W
 ## The effects
 
 **STLT-CHASER** – lights slices step by step through a sequence.
-*Driver* (Chaser, or None to keep every slice lit), the **Sequences** buttons (one per sequence of the editor, named after it; the one playing is marked ▶; map them to MIDI pads or keys to switch sequences live), *Step* (0→1 runs through the sequence; animate it with BPM sync, the timeline or FFT), *Scaling* (Mask, Fill, Stretch), *View*, *Echoes*, *Envelope* or *Sustain / Release*.
+*Driver* (Chaser, Bumper, Random, or None to keep every slice lit), the **Sequences** buttons (one per sequence of the editor, named after it; the one playing is marked ▶; map them to MIDI pads or keys to switch sequences live), *Step* (0→1 runs through the sequence; animate it with BPM sync, the timeline or FFT), *Scaling* (Mask, Fill, Stretch), *View*, *Echoes*, *Envelope* or *Sustain / Release*. With *Driver* on **Bumper** the sequence is not stepped by *Step* but fired by hand: the **Bumper** pads, one per step of the chosen sequence (map them to MIDI pads or keys), each play the same curve over *Bump Length*, read in seconds or in beats at the host's tempo with *Bump Sync*. *Bump Hold* makes a bump wait at *Sustain* for as long as its pad is down and fade out when it is let go. Pads stack, and *Echoes* trails the bump back over the steps before it. *Next* and *Previous* tap through the sequence a step at a time, sharing the pads' cursor, for playing a phrase by hand; *Blast* runs the sequence on by itself at *Blast Speed* until it is let go or pressed again; and *Bump Auto Reset* puts the tapping back to the first step after *Bump Reset Delay* seconds of quiet, so the same phrase can be played again. With *Driver* on **Random** no sequence is used at all: it picks between one and *Max Slices* slices straight out of the *View*, *Random Speed* times a second, each fading on the same curve, and *Echoes* keeps earlier picks lingering.
 Its **Delayer** module shows each slice as the content was some time ago, with the delay spread over the stage by a *Delay Sequence* (first step: no delay, last step: the full delay), in frames, seconds or beats.
 Its **Wiper** module runs gradient wipes through the slices of a second sequence (*Wipe Sequence*, *Wipe Step* and the same controls as STLT-WIPER), showing the video or a *Solid Color*. Chase and wipes add up: a slice shows wherever either lights it, so one STLT-CHASER on the composition does both.
 Its **Outliner** module draws outlines on top with the same controls as STLT-OUTLINER. *Outline Target*: *Lit Slices* follows the chase and the wipes, *All Slices* outlines the whole view; *Outlines Only* hides the video and keeps just the outlines.
