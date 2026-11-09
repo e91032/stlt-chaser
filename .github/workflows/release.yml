@@ -19,7 +19,7 @@ jobs:
             dist: dist:win
             artifact: windows
             files: editor/release/*.exe
-          - os: macos-14
+          - os: macos-15
             dist: dist:mac
             artifact: macos
             files: editor/release/*.dmg
